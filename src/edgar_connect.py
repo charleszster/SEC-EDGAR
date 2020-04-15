@@ -12,7 +12,7 @@ import datetime
 sec_site = 'https://www.sec.gov/'
 app = 'cgi-bin/browse-edgar/'
 filing_type = '8-K'
-save_location = os.path.join(os.path.expanduser('~'), 'Downloads')
+save_location = os.path.join(os.path.expanduser('~'), 'Dropbox', 'Investing', 'Scripts', 'SEC EDGAR', 'output')
 no_delete_location = os.path.join(os.path.expanduser('~'), 'Dropbox', 'Investing', 'Scripts', 'SEC EDGAR',
                                                                                                         'DO_NOT_DELETE')
 last_filing_time_file = 'latest_filing_time.json'
@@ -68,12 +68,31 @@ def get_filing_data(start):
     else:
         return names_links, False
 
-def get_filings(company):
+def get_filing(company):
     r = requests.get(company['filing_link'], timeout=10)
     filing_stripped_pattern = re.compile(r'(<TEXT>)')
     filing_stripped_span = filing_stripped_pattern.search(r.text)
     filing_stripped = r.text[filing_stripped_span.span()[1] + 1:]
     return filing_stripped
+
+def get_filings_from_list(names_links, last_saved_filing_datetime=None):
+    save_count = 0
+    for company in names_links:
+        filing_datetime = get_datetime(company['date'], company['time'])
+        if last_saved_filing_datetime:
+            if filing_datetime > last_saved_filing_datetime:
+                print('Saving filing for %s' % (company['company_name']))
+                filing = get_filing(company)
+                save_filing(filing, company)
+                save_count += 1
+#            else:
+#                break
+        else:
+            print('Saving filing for %s' % (company['company_name']))
+            filing = get_filing(company)
+            save_filing(filing, company)
+            save_count += 1
+    return save_count
 
 def save_filing(filing, company):
     text_file = open(os.path.join(save_location, ''.join([company['date'], ' ', company['time'], ' ',
@@ -90,50 +109,49 @@ def get_last_saved_time():
     try:
         f = open(last_filing_time_fp, 'r')
         last_filing = json.load(f)
-        last_filing_date = find_date.search(last_filing['date'])
-        last_filing_time = find_time.search(last_filing['time'])
-        last_filing_datetime = datetime.datetime(int(last_filing_date.group(1)), int(last_filing_date.group(2)),
-                                                   int(last_filing_date.group(3)), int(last_filing_time.group(1)),
-                                                   int(last_filing_time.group(2)), int(last_filing_time.group(3)))
+        last_saved_filing_datetime = get_datetime(last_filing['date'], last_filing['time'])
     except FileNotFoundError:
         return None
-    return last_filing_datetime
+    return last_saved_filing_datetime
+
+def get_datetime(date, time):
+    date_parsed = find_date.search(date)
+    time_parsed = find_time.search(time)
+    latest_filing_datetime = datetime.datetime(int(date_parsed.group(1)), int(date_parsed.group(2)),
+                                               int(date_parsed.group(3)), int(time_parsed.group(1)),
+                                               int(time_parsed.group(2)), int(time_parsed.group(3)))
+    return latest_filing_datetime
 
 def run():
     get_more = True
     names_links = []
     start = 0
     latest_filing_datetime = ''
+    save_count = 0
     while get_more:
         print('Getting filing info')
         filing_data, get_more = get_filing_data(start)
         if start == 0:
             latest_filing_time = {'date': filing_data[0]['date'], 'time': filing_data[0]['time']}
-            find_date = re.compile(r'(\d\d\d\d)-(\d\d)-(\d\d)')
-            latest_date = find_date.search(filing_data[0]['date'])
-            find_time = re.compile(r'(\d\d).(\d\d).(\d\d)')
-            latest_time = find_time.search(filing_data[0]['time'])
-            latest_filing_datetime = datetime.datetime(int(latest_date.group(1)), int(latest_date.group(2)),
-                                                     int(latest_date.group(3)), int(latest_time.group(1)),
-                                                     int(latest_time.group(2)), int(latest_time.group(3)))
+            latest_filing_datetime = get_datetime(filing_data[0]['date'], filing_data[0]['time'])
         names_links.extend(filing_data)
         start += 100
     last_saved_filing_datetime = get_last_saved_time()
+
     if last_saved_filing_datetime:
         if latest_filing_datetime > last_saved_filing_datetime:
             print('Only getting filings since last saved time.')
+            save_count = get_filings_from_list(names_links, last_saved_filing_datetime)
         else:
-            print('Latest filing time is same or earlier than last saved filing.  Error.  Aborting.')
+            print('Latest filing time is same or earlier than last saved filing.  Nothing done.  Aborting.')
     else:
         print('Didn\'t have date/time of latest filing; downloading everything.')
-        save_count = 0
-#        for company in names_links:
-#            print('Saving filing for %s' % (company['company_name']))
-#            filing = get_filings(company)
-#            save_filing(filing, company)
-#            save_count += 1
-        print('%i filings saved.' % (len(save_count)))
+        save_count = get_filings_from_list(names_links)
+    if save_count and save_count > 0:
         save_latest_filing_time(latest_filing_time)
+        print('%i filings saved.' % (save_count))
+    else:
+        print('No new filings downloaded.')
 
 if __name__ == '__main__':
     run()
